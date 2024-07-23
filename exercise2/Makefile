@@ -1,7 +1,7 @@
 # Makefile
 
 CC = gcc
-CFLAGS = -libverbs -O3 -g
+CFLAGS = -libverbs -O3
 TARGET = server
 
 all: $(TARGET)

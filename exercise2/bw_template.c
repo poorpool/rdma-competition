@@ -363,7 +363,11 @@ pp_init_ctx(struct ibv_device *ib_dev, int size, int rx_depth, int tx_depth,
   ctx->wouts = 0;
 
   ctx->buf = malloc(roundup(size, page_size));
-  ctx->bigbuf = malloc(big_buffer_size);
+  int result = posix_memalign(&ctx->bigbuf, page_size, big_buffer_size);
+  if (result != 0) {
+    fprintf(stderr, "Couldn't allocate big buf: %d\n", result);
+    return NULL;
+  }
   if (!ctx->buf) {
     fprintf(stderr, "Couldn't allocate work buf.\n");
     return NULL;
