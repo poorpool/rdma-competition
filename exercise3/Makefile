@@ -1,5 +1,5 @@
 CC = mpicc
-CFLAGS = -Wall -g
+CFLAGS = -Wall -O3
 LDFLAGS = -lucp -lucs -luct
 
 TARGET = pingpong
