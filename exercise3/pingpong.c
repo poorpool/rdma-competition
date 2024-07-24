@@ -24,8 +24,15 @@ size_t rkey_buffer_size;        // my rkey_buffer_size
 void *remote_rkey_buffer;       // remote rkey buffer
 size_t remote_rkey_buffer_size; // remote rkey_buffer_size
 
+int should_server_run = 1;
+
 void send_callback(void *request, ucs_status_t status, void *user_data) {
-  ucp_request_free(request);
+  ucp_request_free(request); // ?
+}
+
+void recv_callback(void *request, ucs_status_t status,
+                   const ucp_tag_recv_info_t *tag_info, void *user_data) {
+  should_server_run = 0;
 }
 
 ucs_status_t blocking_ep_flush(ucp_ep_h ep, ucp_worker_h worker) {
@@ -128,6 +135,22 @@ int client_function() {
       size *= 2;
     }
   }
+  // send end signal
+  {
+    char end_signal[] = "END";
+    ucp_request_param_t send_param;
+    memset(&send_param, 0, sizeof(send_param));
+    // send_param.op_attr_mask = UCP_OP_ATTR_FIELD_REQUEST;
+    // send_param.request = NULL;
+
+    status_ptr =
+        ucp_tag_send_nbx(ep, end_signal, sizeof(end_signal), 0, &send_param);
+    status = blocking_ep_flush(ep, ucp_worker);
+    if (status != UCS_OK) {
+      fprintf(stderr, "blocking_ep_flush failed\n");
+      return 1;
+    }
+  }
 
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -175,9 +198,25 @@ int server_function() {
     return 1;
   }
 
-  // while (1) {
-  //   ucp_worker_progress(ucp_worker);
-  // }
+  // loop until received tag_send
+  {
+    ucp_request_param_t receive_param;
+    memset(&receive_param, 0, sizeof(receive_param));
+    ucs_status_ptr_t status_ptr;
+    char tag_recv_buf[15];
+    status_ptr =
+        ucp_tag_recv_nbx(ucp_worker, tag_recv_buf, 15, 0, 0, &receive_param);
+
+    if (UCS_PTR_STATUS(status_ptr) == UCS_INPROGRESS) {
+      while (ucp_request_check_status(status_ptr) == UCS_INPROGRESS) {
+        ucp_worker_progress(ucp_worker);
+      }
+      ucp_request_free(status_ptr);
+    } else if (UCS_PTR_IS_ERR(status_ptr)) {
+      fprintf(stderr, "ucp_put_nbx failed\n");
+      return 1;
+    }
+  }
 
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -206,7 +245,9 @@ int main(int argc, char **argv) {
   ucp_params_t ucp_params;
   memset(&ucp_params, 0, sizeof(ucp_params));
   ucp_params.field_mask = UCP_PARAM_FIELD_FEATURES;
-  ucp_params.features = UCP_FEATURE_RMA; // exercise 3 only need RMA
+  ucp_params.features =
+      UCP_FEATURE_RMA |
+      UCP_FEATURE_TAG; // exercise 3 only need RMA. tag match for stop
   ucp_config_t *config;
   status = ucp_config_read(NULL, NULL, &config);
   if (status != UCS_OK) {
