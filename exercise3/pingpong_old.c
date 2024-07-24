@@ -28,27 +28,6 @@ void send_callback(void *request, ucs_status_t status, void *user_data) {
   ucp_request_free(request);
 }
 
-ucs_status_t blocking_ep_flush(ucp_ep_h ep, ucp_worker_h worker) {
-  ucp_request_param_t param;
-  void *request;
-
-  param.op_attr_mask = 0;
-  request = ucp_ep_flush_nbx(ep, &param);
-  if (request == NULL) {
-    return UCS_OK;
-  } else if (UCS_PTR_IS_ERR(request)) {
-    return UCS_PTR_STATUS(request);
-  } else {
-    ucs_status_t status;
-    do {
-      ucp_worker_progress(worker);
-      status = ucp_request_check_status(request);
-    } while (status == UCS_INPROGRESS);
-    ucp_request_free(request);
-    return status;
-  }
-}
-
 int client_function() {
   ucs_status_t status;
 
@@ -99,32 +78,41 @@ int client_function() {
 
   ucs_status_ptr_t status_ptr;
   int warmuped = 0;
-  for (size_t size = 8; size <= BUFFER_SIZE;) {
+  for (size_t size = 8; size <= BUFFER_SIZE; ) {
     double start_time = MPI_Wtime();
     for (int i = 0; i < ITERS; i++) {
       status_ptr = ucp_put_nbx(ep, my_buffer, size, remote_buffer, remote_rkey,
                                &request_param);
       if (UCS_PTR_STATUS(status_ptr) == UCS_INPROGRESS) {
-        ucp_request_free(status_ptr); //  releases the non-blocking request
-        // back
-        //  to the library and continue handling
+        ucp_request_free(status_ptr); //  releases the non-blocking request back
+                                      //  to the library and continue handling
       } else if (UCS_PTR_IS_ERR(status_ptr)) {
         fprintf(stderr, "ucp_put_nbx failed\n");
         return 1;
       }
     }
-    status = blocking_ep_flush(ep, ucp_worker);
-    if (status != UCS_OK) {
-      fprintf(stderr, "blocking_ep_flush failed\n");
+    status_ptr = ucp_worker_flush_nbx(ucp_worker, &request_param);
+    // status_ptr = ucp_ep_flush_nbx(ep, &request_param);
+    if (status_ptr == NULL) {
+      ; // UCS_OK
+    } else if (UCS_PTR_IS_ERR(status_ptr)) {
+      fprintf(stderr, "ucp_worker_flush_nbx failed\n");
       return 1;
+    } else {
+      ucs_status_t sta;
+      do {
+        ucp_worker_progress(ucp_worker);
+        sta = ucp_request_check_status(status_ptr);
+      } while (sta == UCS_INPROGRESS);
+      ucp_request_free(status_ptr);
     }
     double end_time = MPI_Wtime();
 
     if (!warmuped) {
       warmuped = 1;
     } else {
-      printf("%zu\t%.2f\tmicroseconds\n", size,
-             (end_time - start_time) * 1000000.0 / ITERS);
+    printf("%zu\t%.2f\tmicroseconds\n", size,
+           (end_time - start_time) * 1000000.0 / ITERS);
       size *= 2;
     }
   }
@@ -132,7 +120,6 @@ int client_function() {
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Cleanup
-  ucp_ep_destroy(ep);
   ucp_rkey_destroy(remote_rkey);
   free(remote_address);
   free(remote_rkey_buffer);
@@ -175,15 +162,12 @@ int server_function() {
     return 1;
   }
 
-  // while (1) {
-  //   ucp_worker_progress(ucp_worker);
-  // }
+  // TODO(cyx): some operations here...
 
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Cleanup
   ucp_ep_destroy(ep);
-  // ucp_rkey_destroy(remote_rkey);
   free(remote_address);
   free(remote_rkey_buffer);
   return 0;
